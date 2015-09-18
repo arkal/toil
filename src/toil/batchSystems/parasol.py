@@ -23,14 +23,11 @@ import subprocess
 import time
 
 from Queue import Empty
-from multiprocessing import Process
-from multiprocessing import JoinableQueue as Queue
-
-#from threading import Thread
-#from Queue import Queue, Empty
+from Queue import Queue
+from threading import Thread
 
 from toil.batchSystems.abstractBatchSystem import AbstractBatchSystem
-from toil.lib.bioio import getTempFile
+from toil.lib.bioio import getTempFile, getTempDirectory
 
 logger = logging.getLogger( __name__ )
 
@@ -59,7 +56,7 @@ def popenParasolCommand(command, runUntilSuccessful=True):
         time.sleep(10)
         logger.warn("Waited for a few seconds, will try again")
 
-def getUpdatedJob(parasolResultsFile, outputQueue1, outputQueue2):
+def getUpdatedJob(parasolResultsDir, cpuUsageQueue, updatedJobsQueue, shutdownQueue):
     """We use the parasol results to update the status of jobs, adding them
     to the list of updated jobs.
     
@@ -79,46 +76,30 @@ def getUpdatedJob(parasolResultsFile, outputQueue1, outputQueue2):
     
     plus you finally have the command name..
     """
-    parasolResultsFileHandle = open(parasolResultsFile, 'r')
+    resultsFiles = set()
+    resultsFileHandles = []
     while True:
-        line = parasolResultsFileHandle.readline()
-        if line != '':
-            results = line.split()
-            result = int(results[0])
-            jobID = int(results[2])
-            outputQueue1.put(jobID)
-            outputQueue2.put((jobID, result))
-        else:
-            time.sleep(0.01) #Go to sleep to avoid churning
+        #Look for any new results files that have been created, and open them
+        newResultsFiles = set(os.listdir(parasolResultsDir)).difference(resultsFiles)
+        for newFile in newResultsFiles:
+            resultsFiles.add(newFile)
+            newFilePath = os.path.join(parasolResultsDir, newFile)
+            resultsFileHandles.append(open(newFilePath, 'r'))
 
+        for fileHandle in resultsFileHandles:
+            line = fileHandle.readline()
+            if line != '':
+                results = line.split()
+                result = int(results[0])
+                jobID = int(results[2])
+                cpuUsageQueue.put(jobID)
+                updatedJobsQueue.put((jobID, result))
 
-class ParasolBatch():
-    def __init__(self, batchSystem, cores, memory):
-        self.batchSystem = batchSystem
-        self.resultsFile = getTempFile(rootDir=self.batchSystem.tempDir)
-        self.cores = cores
-        self.memory = memory
-        self.outputQueue1 = Queue()
-        self.outputQueue2 = Queue()
-
-        #Reset the job queue and results
-        exitValue = popenParasolCommand("%s -results=%s clear sick" % (self.batchSystem.parasolCommand, self.resultsFile), False)[0]
-        if exitValue is not None:
-            logger.warn("Could not clear sick status of the parasol batch %s" % self.resultsFile)
-        exitValue = popenParasolCommand("%s -results=%s flushResults" % (self.batchSystem.parasolCommand, self.resultsFile), False)[0]
-        if exitValue is not None:
-            logger.warn("Could not flush the parasol batch %s" % self.resultsFile)
-        open(self.resultsFile, 'w').close()
-
-        self.worker = Process(target=getUpdatedJob, args=(self.resultsFile, self.outputQueue1, self.outputQueue2))
-        self.worker.daemon = True
-        self.worker.start()
-
-    def getUpdatedBatchJob(self, maxWait):
-        jobID = self.batchSystem.getFromQueueSafely(self.outputQueue2, maxWait)
-        if jobID != None:
-            self.outputQueue2.task_done()
-        return jobID
+        if not shutdownQueue.empty():
+            for fileHandle in resultsFileHandles:
+                fileHandle.close()
+            break
+        time.sleep(0.01) #Go to sleep to avoid churning
 
 class ParasolBatchSystem(AbstractBatchSystem):
     """The interface for Parasol.
@@ -130,48 +111,75 @@ class ParasolBatchSystem(AbstractBatchSystem):
                         "this batchsystem interface does not support such limiting" % maxMemory)
         #Keep the name of the results file for the pstat2 command..
         self.parasolCommand = config.parasolCommand
-        self.tempDir = config.jobStore
-        #Reset the job queue and results (initially, we do this again once we've killed the jobs)
+        self.parasolResultsDir = getTempDirectory(rootDir=config.jobStore)
+
         self.queuePattern = re.compile("q\s+([0-9]+)")
         self.runningPattern = re.compile("r\s+([0-9]+)\s+[\S]+\s+[\S]+\s+([0-9]+)\s+[\S]+")
 
         logger.info("Going to sleep for a few seconds to kill any existing jobs")
         time.sleep(5) #Give batch system a second to sort itself out.
         logger.info("Removed any old jobs from the queue")
-        self.batches = []
 
+        #In Parasol, each results file corresponds to a separate batch, and all
+        #jobs in a batch have the same cpu and memory requirements. The keys to this
+        #dictionary are the (cpu, memory) tuples for each batch. A new batch
+        #is created whenever a job has a new unique combination of cpu and memory
+        #requirements.
+        self.resultsFiles = dict()
+        self.maxBatches = config.maxParasolBatches
+
+        #Allows the worker process to send back the IDs of
+        #jobs that have finished, so the batch system can
+        #decrease its used cpus counter
+        self.cpuUsageQueue = Queue()
+
+        #Also stores finished job IDs, but is read
+        #by getUpdatedJobIDs().
+        self.updatedJobsQueue = Queue()
+
+        #Use this to stop the worker when shutting down
+        self.shutdownQueue = Queue()
+
+        self.worker = Thread(target=getUpdatedJob, args=(self.parasolResultsDir, self.cpuUsageQueue, self.updatedJobsQueue, self.shutdownQueue))
+        self.worker.start()
         self.usedCpus = 0
         self.jobIDsToCpu = {}
-         
+
     def issueBatchJob(self, command, memory, cores, disk):
         """Issues parasol with job commands.
         """
         self.checkResourceRequest(memory, cores, disk)
-        #look for a batch for jobs with these resource requirements
-        batch = None
-        for i in range(len(self.batches)):
-            if self.batches[i].cores == cores and self.batches[i].memory == memory:
-                batch = self.batches[i]
-        if batch is None:
-            batch = ParasolBatch(batchSystem = self, cores = cores, memory = memory)
-            self.batches.append(batch)
-        pattern = re.compile("your job ([0-9]+).*")
-        parasolCommand = "%s -verbose -ram=%i -cpu=%i -results=%s add job '%s'" % (self.parasolCommand, memory, cores, batch.resultsFile, command)
 
+        megabyte = 1e6
+        roundedMemory = int(memory/megabyte) * megabyte
+        #Look for a batch for jobs with these resource requirements, with
+        #the memory rounded down to the nearest megabyte. Rounding down
+        #meams the new job can't ever decrease the memory requirements
+        #of jobs already in the batch.
+        if (roundedMemory, cores) in self.resultsFiles.keys():
+            results = self.resultsFiles[(roundedMemory, cores)]
+        else:
+            results = getTempFile(rootDir=self.parasolResultsDir)
+            self.resultsFiles[(roundedMemory, cores)] = results
+        if len(self.resultsFiles.values()) > self.maxBatches:
+            raise RuntimeError("Number of parasol batches exceeded the limit of %i" % self.maxBatches)
+
+        pattern = re.compile("your job ([0-9]+).*")
+        parasolCommand = "%s -verbose -ram=%i -cpu=%i -results=%s add job '%s'" % (self.parasolCommand, memory, cores, results, command)
         #Deal with the cpus
         self.usedCpus += cores
         while True: #Process finished results with no wait
             try:
-               jobID = batch.outputQueue1.get_nowait()
-               self.usedCpus -= self.jobIDsToCpu.pop(jobID)
-               assert self.usedCpus >= 0
-               batch.outputQueue1.task_done()
+               jobID = self.cpuUsageQueue.get_nowait()
             except Empty:
                 break
-        while self.usedCpus > self.maxCores: #If we are still waiting
-            self.usedCpus -= self.jobIDsToCpu.pop(batch.outputQueue1.get())
+            self.usedCpus -= self.jobIDsToCpu.pop(jobID)
             assert self.usedCpus >= 0
-            batch.outputQueue1.task_done()
+            self.cpuUsageQueue.task_done()
+        while self.usedCpus > self.maxCores: #If we are still waiting
+            self.usedCpus -= self.jobIDsToCpu.pop(self.cpuUsageQueue.get())
+            assert self.usedCpus >= 0
+            self.cpuUsageQueue.task_done()
         #Now keep going
         while True:
             #time.sleep(0.1) #Sleep to let parasol catch up #Apparently unnecessary
@@ -187,7 +195,7 @@ class ParasolBatchSystem(AbstractBatchSystem):
         logger.debug("Got the parasol job id: %s from line: %s" % (jobID, line))
         logger.debug("Issued the job command: %s with (parasol) job id: %i " % (parasolCommand, jobID))
         return jobID
-    
+
     def killBatchJobs(self, jobIDs):
         """Kills the given jobs, represented as Job ids, then checks they are dead by checking
         they are not in the list of issued jobs.
@@ -201,7 +209,7 @@ class ParasolBatchSystem(AbstractBatchSystem):
                 return
             time.sleep(5)
             logger.warn("Tried to kill some jobs, but something happened and they are still going, so I'll try again")
-    
+
     def getIssuedBatchJobIDs(self):
         """Gets the list of jobs issued to parasol.
         """
@@ -209,16 +217,15 @@ class ParasolBatchSystem(AbstractBatchSystem):
         #31816891 localhost  benedictpaten 2009/07/23 10:54:09 python ~/Desktop/out.txt
 
         #get the results file for each batch that has been created
-        resultsFiles = [batch.resultsFile for batch in self.batches]
         issuedJobs = set()
         for line in popenParasolCommand("%s -extended list jobs" % self.parasolCommand)[1]:
             if line != '':
                 tokens = line.split()
-                if tokens[-1] in resultsFiles:
+                if tokens[-1] in self.resultsFiles.values():
                     jobID = int(tokens[0])
                     issuedJobs.add(jobID)
         return list(issuedJobs)
-    
+
     def getRunningBatchJobIDs(self):
         """Returns map of running jobIDs and the time they have been running.
         """
@@ -238,20 +245,32 @@ class ParasolBatchSystem(AbstractBatchSystem):
         return runningJobs
     
     def getUpdatedBatchJob(self, maxWait):
-        for batch in self.batches:
-            jobID = batch.getUpdatedBatchJob(maxWait)
-            if jobID:
-                return jobID
-        return None
-    
+        jobID = self.getFromQueueSafely(self.updatedJobsQueue, maxWait)
+        if jobID != None:
+            self.updatedJobsQueue.task_done()
+        return jobID
+
     @classmethod
     def getRescueBatchJobFrequency(cls):
         """Parasol leaks jobs, but rescuing jobs involves calls to parasol list jobs and pstat2,
         making it expensive. 
         """
         return 5400 #Once every 90 minutes
+
     def shutdown(self):
-        pass
+        self.killBatchJobs(self.getIssuedBatchJobIDs()) #cleanup jobs
+        for results in self.resultsFiles.values():
+            exitValue = popenParasolCommand("%s -results=%s clear sick" % (self.parasolCommand, results), False)[0]
+            if exitValue is not None:
+                logger.warn("Could not clear sick status of the parasol batch %s" % results)
+            exitValue = popenParasolCommand("%s -results=%s flushResults" % (self.parasolCommand, results), False)[0]
+            if exitValue is not None:
+                logger.warn("Could not flush the parasol batch %s" % results)
+        self.shutdownQueue.put(True)
+        self.worker.join()
+        for results in self.resultsFiles.values():
+            os.remove(results)
+        os.rmdir(self.parasolResultsDir)
 
 def main():
     pass

@@ -41,7 +41,6 @@ numJobs = 2
 #
 numCoresPerJob = (numCores) / numJobs
 
-
 class hidden:
     """
     Hide abstract base class from unittest's test case loader
@@ -104,10 +103,10 @@ class hidden:
         def testGetIssuedJobIDs(self):
             issuedIDs = []
             issuedIDs.append(
-                self.batchSystem.issueBatchJob('sleep 1', memory=10, cores=numCoresPerJob,
+                self.batchSystem.issueBatchJob('sleep 1', memory=100e6, cores=numCoresPerJob,
                                                disk=1000))
             issuedIDs.append(
-                self.batchSystem.issueBatchJob('sleep 1', memory=10, cores=numCoresPerJob,
+                self.batchSystem.issueBatchJob('sleep 1', memory=100e6, cores=numCoresPerJob,
                                                disk=1000))
             self.assertEqual(set(issuedIDs), set(self.batchSystem.getIssuedBatchJobIDs()))
 
@@ -163,7 +162,6 @@ class hidden:
                     time.sleep(0.1)
                     # pass updates too quickly (~24e6 iter/sec), which is why I'm using time.sleep(0.1):
 
-
 @needs_mesos
 class MesosBatchSystemTest(hidden.AbstractBatchSystemTest, MesosTestSupport):
     """
@@ -186,7 +184,6 @@ class SingleMachineBatchSystemTest(hidden.AbstractBatchSystemTest):
         return SingleMachineBatchSystem(config=self.config, maxCores=numCores, maxMemory=1e9,
                                         maxDisk=1001)
 
-
 @needs_parasol
 class ParasolBatchSystemTest(hidden.AbstractBatchSystemTest, ParasolTestSupport):
     """
@@ -204,9 +201,8 @@ class ParasolBatchSystemTest(hidden.AbstractBatchSystemTest, ParasolTestSupport)
                                   maxDisk=1001)
 
     def tearDown(self):
-        self._stopParasol()
         super(ParasolBatchSystemTest, self).tearDown()
-
+        self._stopParasol()
 
     def testIssueJob(self):
         # TODO
@@ -218,6 +214,7 @@ class ParasolBatchSystemTest(hidden.AbstractBatchSystemTest, ParasolTestSupport)
         self.batchSystem.issueBatchJob(jobCommand, memory=100e6, cores=1, disk=1000)
         self.wait_for_jobs(wait_for_completion=True)
         self.assertTrue(os.path.exists(test_path))
+
     def testBatchResourceLimits(self):
         #self.batchSystem.issueBatchJob("sleep 100", memory=1e9, cores=1, disk=1000)
         job1 = self.batchSystem.issueBatchJob("sleep 100", memory=1e9, cores=1, disk=1000)
