@@ -216,7 +216,6 @@ class ParasolBatchSystem(AbstractBatchSystem):
         #Example issued job, first field is jobID, last is the results file
         #31816891 localhost  benedictpaten 2009/07/23 10:54:09 python ~/Desktop/out.txt
 
-        #get the results file for each batch that has been created
         issuedJobs = set()
         for line in popenParasolCommand("%s -extended list jobs" % self.parasolCommand)[1]:
             if line != '':

@@ -103,10 +103,10 @@ class hidden:
         def testGetIssuedJobIDs(self):
             issuedIDs = []
             issuedIDs.append(
-                self.batchSystem.issueBatchJob('sleep 1', memory=100e6, cores=numCoresPerJob,
+                self.batchSystem.issueBatchJob('sleep 1', memory=10, cores=numCoresPerJob,
                                                disk=1000))
             issuedIDs.append(
-                self.batchSystem.issueBatchJob('sleep 1', memory=100e6, cores=numCoresPerJob,
+                self.batchSystem.issueBatchJob('sleep 1', memory=10, cores=numCoresPerJob,
                                                disk=1000))
             self.assertEqual(set(issuedIDs), set(self.batchSystem.getIssuedBatchJobIDs()))
 
