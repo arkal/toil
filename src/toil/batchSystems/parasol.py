@@ -56,50 +56,7 @@ def popenParasolCommand(command, runUntilSuccessful=True):
         time.sleep(10)
         logger.warn("Waited for a few seconds, will try again")
 
-def getUpdatedJob(parasolResultsDir, cpuUsageQueue, updatedJobsQueue, shutdownQueue):
-    """We use the parasol results to update the status of jobs, adding them
-    to the list of updated jobs.
-    
-    Results have the following structure.. (thanks Mark D!)
-    
-    int status;    /* Job status - wait() return format. 0 is good. */
-    char *host;    /* Machine job ran on. */
-    char *jobId;    /* Job queuing system job ID */
-    char *exe;    /* Job executable file (no path) */
-    int usrTicks;    /* 'User' CPU time in ticks. */
-    int sysTicks;    /* 'System' CPU time in ticks. */
-    unsigned submitTime;    /* Job submission time in seconds since 1/1/1970 */
-    unsigned startTime;    /* Job start time in seconds since 1/1/1970 */
-    unsigned endTime;    /* Job end time in seconds since 1/1/1970 */
-    char *user;    /* User who ran job */
-    char *errFile;    /* Location of stderr file on host */
-    
-    plus you finally have the command name..
-    """
-    resultsFiles = set()
-    resultsFileHandles = []
-    while True:
-        #Look for any new results files that have been created, and open them
-        newResultsFiles = set(os.listdir(parasolResultsDir)).difference(resultsFiles)
-        for newFile in newResultsFiles:
-            resultsFiles.add(newFile)
-            newFilePath = os.path.join(parasolResultsDir, newFile)
-            resultsFileHandles.append(open(newFilePath, 'r'))
 
-        for fileHandle in resultsFileHandles:
-            line = fileHandle.readline()
-            if line != '':
-                results = line.split()
-                result = int(results[0])
-                jobID = int(results[2])
-                cpuUsageQueue.put(jobID)
-                updatedJobsQueue.put((jobID, result))
-
-        if not shutdownQueue.empty():
-            for fileHandle in resultsFileHandles:
-                fileHandle.close()
-            break
-        time.sleep(0.01) #Go to sleep to avoid churning
 
 class ParasolBatchSystem(AbstractBatchSystem):
     """The interface for Parasol.
@@ -138,9 +95,9 @@ class ParasolBatchSystem(AbstractBatchSystem):
         self.updatedJobsQueue = Queue()
 
         #Use this to stop the worker when shutting down
-        self.shutdownQueue = Queue()
+        self.running = True
 
-        self.worker = Thread(target=getUpdatedJob, args=(self.parasolResultsDir, self.cpuUsageQueue, self.updatedJobsQueue, self.shutdownQueue))
+        self.worker = Thread(target=self.updatedJobWorker, args=())
         self.worker.start()
         self.usedCpus = 0
         self.jobIDsToCpu = {}
@@ -255,6 +212,48 @@ class ParasolBatchSystem(AbstractBatchSystem):
         making it expensive. 
         """
         return 5400 #Once every 90 minutes
+    def updatedJobWorker(self):
+        """We use the parasol results to update the status of jobs, adding them
+        to the list of updated jobs.
+
+        Results have the following structure.. (thanks Mark D!)
+
+        int status;    /* Job status - wait() return format. 0 is good. */
+        char *host;    /* Machine job ran on. */
+        char *jobId;    /* Job queuing system job ID */
+        char *exe;    /* Job executable file (no path) */
+        int usrTicks;    /* 'User' CPU time in ticks. */
+        int sysTicks;    /* 'System' CPU time in ticks. */
+        unsigned submitTime;    /* Job submission time in seconds since 1/1/1970 */
+        unsigned startTime;    /* Job start time in seconds since 1/1/1970 */
+        unsigned endTime;    /* Job end time in seconds since 1/1/1970 */
+        char *user;    /* User who ran job */
+        char *errFile;    /* Location of stderr file on host */
+
+        plus you finally have the command name..
+        """
+        resultsFiles = set()
+        resultsFileHandles = []
+        while self.running:
+            #Look for any new results files that have been created, and open them
+            newResultsFiles = set(os.listdir(self.parasolResultsDir)).difference(resultsFiles)
+            for newFile in newResultsFiles:
+                resultsFiles.add(newFile)
+                newFilePath = os.path.join(self.parasolResultsDir, newFile)
+                resultsFileHandles.append(open(newFilePath, 'r'))
+
+            for fileHandle in resultsFileHandles:
+                line = fileHandle.readline()
+                if line != '':
+                    results = line.split()
+                    result = int(results[0])
+                    jobID = int(results[2])
+                    self.cpuUsageQueue.put(jobID)
+                    self.updatedJobsQueue.put((jobID, result))
+            time.sleep(0.01) #Go to sleep to avoid churning
+        for fileHandle in resultsFileHandles:
+            fileHandle.close()
+
 
     def shutdown(self):
         self.killBatchJobs(self.getIssuedBatchJobIDs()) #cleanup jobs
@@ -265,7 +264,7 @@ class ParasolBatchSystem(AbstractBatchSystem):
             exitValue = popenParasolCommand("%s -results=%s flushResults" % (self.parasolCommand, results), False)[0]
             if exitValue is not None:
                 logger.warn("Could not flush the parasol batch %s" % results)
-        self.shutdownQueue.put(True)
+        self.running = False
         self.worker.join()
         for results in self.resultsFiles.values():
             os.remove(results)
