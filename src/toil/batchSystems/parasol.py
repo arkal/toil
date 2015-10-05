@@ -163,6 +163,14 @@ class ParasolBatchSystem(AbstractBatchSystem):
                 logger.info("Tried to remove jobID: %i, with exit value: %i" % (jobID, exitValue))
             runningJobs = self.getIssuedBatchJobIDs()
             if set(jobIDs).difference(set(runningJobs)) == set(jobIDs):
+                #Since the job has been removed,
+                #parasol won't print its exit status and other information
+                #to the results file for the worker to read. Add this information
+                #to the queues to make the behavior for killed jobs the same
+                #as for jobs that exited naturally.
+                for jobID in jobIDs:
+                    self.updatedJobsQueue.put((jobID, 0))
+                    self.cpuUsageQueue.put(jobID)
                 return
             time.sleep(5)
             logger.warn("Tried to kill some jobs, but something happened and they are still going, so I'll try again")
