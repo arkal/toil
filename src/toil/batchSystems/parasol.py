@@ -173,8 +173,16 @@ class ParasolBatchSystem(AbstractBatchSystem):
             for jobID in jobIDs:
                 exitValue = popenParasolCommand("%s remove job %i" % (self.parasolCommand, jobID), runUntilSuccessful=False)[0]
                 logger.info("Tried to remove jobID: %i, with exit value: %i" % (jobID, exitValue))
+                if exitValue == 0:
+                    #if we killed the job, we need to add it to the updated
+                    #jobs queue, because parasol won't write a line for it
+                    #in the results file.
+                    self.outputQueue1.put(jobID)
+                    self.outputQueue2.put((jobID, 1))
             runningJobs = self.getIssuedBatchJobIDs()
             if set(jobIDs).difference(set(runningJobs)) == set(jobIDs):
+                #all the jobs we need to kill were either killed or finished
+                #naturally
                 return
             time.sleep(5)
             logger.warn("Tried to kill some jobs, but something happened and they are still going, so I'll try again")

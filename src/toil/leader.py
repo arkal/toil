@@ -157,8 +157,6 @@ class JobBatcher:
         """
         if len(jobsToKill) > 0:
             self.batchSystem.killBatchJobs(jobsToKill)
-            for jobBatchSystemID in jobsToKill:
-                self.processFinishedJob(jobBatchSystemID, 1)
     
     #Following functions handle error cases for when jobs have gone awry with the batch system.
 

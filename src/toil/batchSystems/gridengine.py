@@ -179,6 +179,7 @@ class Worker(Thread):
                     logger.debug('Adding jobID %s to killedJobsQueue', jobID)
                     self.killedJobsQueue.put(jobID)
                     killList.remove(jobID)
+                    self.updatedJobsQueue.put((jobID, 1))
                     self.forgetJob(jobID)
             if len(killList) > 0:
                 logger.warn("Some jobs weren't killed, trying again in %is.", sleepSeconds)
