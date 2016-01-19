@@ -76,7 +76,6 @@ class MesosExecutor(mesos.interface.Executor):
         log.critical("Shutting down executor...")
         for taskId, pid in self.runningTasks.items():
             self.killTask(driver, taskId)
-        Resource.cleanSystem()
         AbstractBatchSystem.workerCleanup(self.workerCleanupInfo)
         log.critical("Executor shut down")
 

@@ -161,15 +161,18 @@ class AbstractBatchSystem:
     @staticmethod
     def workerCleanup(workerCleanupInfo):
         '''
-        Cleans up the worker node on batch system shutdown. For now it does nothing.
+        Cleans up the worker node on batch system shutdown.
         :param collections.namedtuple workerCleanupInfo: A named tuple consisting of all the
         relevant information for cleaning up the worker.
         '''
-        assert workerCleanupInfo.__class__.__name__ == 'WorkerCleanupInfo'
+        assert isinstance(workerCleanupInfo, WorkerCleanupInfo)
+        # If the workflow ID hasn't been set, this batch system was scheduled for shutdown before
+        # the jobstore was set up. Hence there's no need for a cleanup
+        if workerCleanupInfo.workflowID is None:
+            return
         workflowDir = getToilWorkflowDir(workerCleanupInfo.workflowID, workerCleanupInfo.workDir)
         # TODO: logic here for cleanup flag
         shutil.rmtree(workflowDir)
-
 
 
 class InsufficientSystemResources(Exception):

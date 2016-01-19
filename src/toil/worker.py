@@ -66,7 +66,7 @@ class AsyncJobStoreWrite:
     
     def blockUntilSync(self):
         pass
-    
+
 def main():
     logging.basicConfig()
 
@@ -199,7 +199,7 @@ def main():
     statsDict = MagicExpando()
     statsDict.jobs = []
     messages = []
-    blockFn = lambda : True
+    blockFn = lambda : None
     cleanCacheFn = lambda x : True
     try:
 
@@ -211,7 +211,11 @@ def main():
         #them.
         logger.debug("Next available file descriptor: {}".format(
             nextOpenDescriptor()))
-    
+
+        # Setup the caching variable now in case of an exception during loading of jobwrapper, etc
+        # Flag to identify if the run is cached or not.
+        FileStore = Job.CachedFileStore if config.useSharedCache else Job.FileStore
+
         ##########################################
         #Load the jobWrapper
         ##########################################
@@ -241,10 +245,8 @@ def main():
         jobStore.update(jobWrapper) #Update first, before deleting the file
         if oldLogFile != None:
             jobStore.delete(oldLogFile)
-            
-        #Make a temporary file directory for the jobWrapper
-        localTempDir = makePublicDir(os.path.join(localWorkerTempDir, "localTempDir"))
-    
+
+
         ##########################################
         #Setup the stats, if requested
         ##########################################
@@ -253,50 +255,46 @@ def main():
             startTime = time.time()
             startClock = getTotalCpuTime()
 
-        startTime = time.time() 
+        startTime = time.time()
         while True:
             ##########################################
             #Run the jobWrapper, if there is one
             ##########################################
             
-            if jobWrapper.command != None:
-                if jobWrapper.command.startswith( "_toil " ):
-                    #Load the job
-                    job = Job._loadJob(jobWrapper.command, jobStore)
-                    
+            if jobWrapper.command is not None:
+                assert jobWrapper.command.startswith( "_toil " )
+                #Load the job
+                job = Job._loadJob(jobWrapper.command, jobStore)
+
+                # Need to fix all this for non shared cache runs
+                if not config.useSharedCache:
                     #Cleanup the cache from the previous job
                     cleanCacheFn(job.effectiveRequirements(jobStore.config).cache)
-                    
-                    #Create a fileStore object for the job
-                    fileStore = Job.FileStore(jobStore, jobWrapper, localTempDir, 
-                                              blockFn)
+
+                # Create a fileStore object for the job
+                fileStore = FileStore(jobStore, jobWrapper, localWorkerTempDir, blockFn)
+                with fileStore.open(job):
                     #Get the next block function and list that will contain any messages
                     blockFn = fileStore._blockFn
                     messages = fileStore.loggingMessages
 
                     job._execute(jobWrapper=jobWrapper,
-                                           stats=statsDict if config.stats else None,
-                                           localTempDir=localTempDir,
-                                           jobStore=jobStore,
-                                           fileStore=fileStore)
+                                 stats=statsDict if config.stats else None,
+                                 localTempDir=fileStore.localTempDir,
+                                 jobStore=jobStore,
+                                 fileStore=fileStore)
 
+                if not config.useSharedCache:
                     #Set the clean cache function
                     cleanCacheFn = fileStore._cleanLocalTempDir
-                    
-                else: #Is another command (running outside of jobs may be deprecated)
-                    #Cleanup the cache from the previous job
-                    cleanCacheFn(0)
-                    
-                    system(jobWrapper.command)
-                    #Set a dummy clean cache fn
-                    cleanCacheFn = lambda x : None
+
             else:
                 #The command may be none, in which case
                 #the jobWrapper is either a shell ready to be deleted or has 
                 #been scheduled after a failure to cleanup
                 break
             
-            if Job.FileStore._terminateEvent.isSet():
+            if FileStore._terminateEvent.isSet():
                 raise RuntimeError("The termination flag is set")
 
             ##########################################
@@ -363,10 +361,10 @@ def main():
             jobWrapper.stack += successorJob.stack
             assert jobWrapper.memory >= successorJob.memory
             assert jobWrapper.cores >= successorJob.cores
-            
-            #Build a fileStore to update the job
-            fileStore = Job.FileStore(jobStore, jobWrapper, localTempDir, blockFn)
-            
+
+            # Build a fileStore to update the job.
+            fileStore = FileStore(jobStore, jobWrapper, localWorkerTempDir, blockFn)
+
             #Update blockFn
             blockFn = fileStore._blockFn
             
@@ -400,7 +398,7 @@ def main():
     except: #Case that something goes wrong in worker
         traceback.print_exc()
         logger.error("Exiting the worker because of a failed jobWrapper on host %s", socket.gethostname())
-        Job.FileStore._terminateEvent.set()
+        FileStore._terminateEvent.set()
     
     ##########################################
     #Wait for the asynchronous chain of writes/updates to finish
@@ -413,7 +411,7 @@ def main():
     #so safe to test if they completed okay
     ########################################## 
     
-    if Job.FileStore._terminateEvent.isSet():
+    if FileStore._terminateEvent.isSet():
         jobWrapper = jobStore.load(jobStoreID)
         jobWrapper.setupJobAfterFailure(config)
         workerFailed = True

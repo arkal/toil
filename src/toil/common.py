@@ -62,6 +62,8 @@ class Config(object):
         self.defaultMemory = 2147483648
         self.defaultCores = 1
         self.defaultDisk = 2147483648
+        self.useSharedCache = True
+        self.readGlobalFileMutableByDefault = False
         self.defaultCache = self.defaultDisk
         self.maxCores = sys.maxint
         self.maxMemory = sys.maxint
@@ -76,6 +78,8 @@ class Config(object):
         self.maxLogFileSize=50120
         self.sseKey = None
         self.cseKey = None
+        self.useAsync = True
+
 
         #Debug options
         self.badWorker = 0.0
@@ -152,6 +156,8 @@ class Config(object):
         setOption("defaultMemory", h2b, iC(1))
         setOption("defaultCores", float, fC(1.0))
         setOption("defaultDisk", h2b, iC(1))
+        setOption("useSharedCache")
+        setOption("backwardsCompatible")
         setOption("defaultCache", h2b, iC(0))
         setOption("maxCores", int, iC(1))
         setOption("maxMemory", h2b, iC(1))
@@ -257,6 +263,18 @@ def _addOptions(addGroupFn, config):
                      'that do not specify an explicit value for this requirement. Standard '
                      'suffixes like K, Ki, M, Mi, G or Gi are supported. Default is %s' %
                      bytes2human( config.defaultDisk, symbols='iec' ))
+    addOptionFn("--useSharedCache", dest="useSharedCache", action='store_true', default=None,
+                help=('Should the shared cache strategy be used? If true, all workers on a node '
+                      'will share a cache and parallel workers requesting the same file will link '
+                      'to the same cached file thereby reducing the disk used, and increasing '
+                      'speed of file operations. This overrides the defaultCache parameter. '
+                      'Default is False'))
+    addOptionFn("--backwardsCompatible", dest="backwardsCompatible", action='store_true',
+                default=None, help='Shared caching disallows modification of read global files by '
+                'default and thus is backwards incompatible with scripts written in Toil versions '
+                'lower than 3.2.0. This flag makes it compatible with those scripts, however it '
+                'also defeats the purpose of shared caching via hard links to save space. Default '
+                'is False')
     addOptionFn('--defaultCache', dest='defaultCache', default=None, metavar='INT',
                 help='The default amount of disk space to use for caching files shared between '
                      'jobs. Only applicable to jobs that do not specify an explicit value for '
@@ -454,13 +472,19 @@ def setupToil(options, userScript=None):
     #Get options specified by the user
     config.setOptions(options)
     if not options.restart: #Create for the first time
+        # This allows the caching to reload on restart
+        config.workFlowAttemptNumber = 0
         batchSystemClass, kwargs = loadBatchSystemClass(config)
+        if config.useSharedCache and not batchSystemClass.supportsWorkerCleanup():
+            raise RuntimeError('%s currently does not support shared caching.' % config.batchSystem)
         #Load the jobStore
         jobStore = loadJobStore(config.jobStore, config=config)
     else:
         #Reload the workflow
         jobStore = loadJobStore(config.jobStore)
         config = jobStore.config
+        # Append the workflow attempt number so the shared cache knows it should reset the stats.
+        config.workFlowAttemptNumber += 1
         #Update the earlier config with any options that have been set
         config.setOptions(options)
         #Write these new options back to disk
