@@ -48,23 +48,27 @@ def _fetchAzureAccountKey(accountName):
     """
     Find the account key for a given Azure storage account.
 
-    The account key is taken from the AZURE_ACCOUNT_KEY environment
-    variable if it exists, or from looking in the file
-    "~/.toilAzureCredentials". That file has format:
+    The account key is taken from the AZURE_ACCOUNT_KEY_<account> environment variable if it
+    exists, then from plain AZURE_ACCOUNT_KEY, and then from looking in the file
+    ~/.toilAzureCredentials. That file has format:
 
     [AzureStorageCredentials]
     accountName1=ACCOUNTKEY1==
     accountName2=ACCOUNTKEY2==
     """
-    if 'AZURE_ACCOUNT_KEY' in os.environ:
-        return os.environ['AZURE_ACCOUNT_KEY']
-    configParser = RawConfigParser()
-    configParser.read(os.path.expanduser(credential_file_path))
     try:
-        return configParser.get('AzureStorageCredentials', accountName)
-    except NoOptionError:
-        raise RuntimeError("No account key found for %s, please provide it in %s" %
-                           (accountName, credential_file_path))
+        return os.environ['AZURE_ACCOUNT_KEY_' + accountName]
+    except KeyError:
+        try:
+            return os.environ['AZURE_ACCOUNT_KEY']
+        except KeyError:
+            configParser = RawConfigParser()
+            configParser.read(os.path.expanduser(credential_file_path))
+            try:
+                return configParser.get('AzureStorageCredentials', accountName)
+            except NoOptionError:
+                raise RuntimeError("No account key found for '%s', please provide it in '%s'" %
+                                   (accountName, credential_file_path))
 
 
 maxAzureTablePropertySize = 64 * 1024
@@ -679,7 +683,7 @@ def retry_on_error(num_tries=5, retriable_exceptions=(socket.error, socket.gaier
 
     :param num_tries: number of times to try before giving up.
     :param retriable_exceptions: a tuple of exceptions that should always be retried.
-    :param retriable_check: a function that takes an exception not in retriable_exceptions
+    :param retriable_check: a function that takes an exception not in retriable_exceptions \
     and returns True if it should be retried, and False otherwise.
 
     :return: a generator yielding contextmanagers

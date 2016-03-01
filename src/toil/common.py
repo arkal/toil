@@ -35,7 +35,12 @@ class Config(object):
     Class to represent configuration operations for a toil workflow run. 
     """
     def __init__(self):
-        #Core options
+        # Core options
+        self.workflowID = None
+        """This attribute uniquely identifies the job store and therefore the workflow. It is
+        necessary in order to distinguish between two consequitive workflows for which
+        self.jobStore is the same, e.g. when a job store name is reused after a previous run has
+        finished sucessfully and its job store has been clean up."""
         self.jobStore = os.path.abspath("./toil")
         self.logLevel = getLogLevelString()
         self.workDir = None
@@ -293,6 +298,8 @@ def _addOptions(addGroupFn, config):
                       help=("The maximum size of a job log file to keep (in bytes), log files larger "
                             "than this will be truncated to the last X bytes. Default is 50 "
                             "kilobytes, default=%s" % config.maxLogFileSize))
+    addOptionFn("--realTimeLogging", dest="realTimeLogging", action="store_true", default=False,
+                help="Enable real-time logging from workers to masters")
 
     addOptionFn("--sseKey", dest="sseKey", default=None,
             help="Path to file containing 32 character key to be used for server-side encryption on awsJobStore. SSE will "
@@ -393,7 +400,7 @@ def loadJobStore( jobStoreString, config=None ):
     :param jobStoreString: see exception message below
     :param config: see AbstractJobStore.__init__
     :return: an instance of a concrete subclass of AbstractJobStore
-    :rtype : jobStores.abstractJobStore.AbstractJobStore
+    :rtype: jobStores.abstractJobStore.AbstractJobStore
     """
     if jobStoreString[ 0 ] in '/.':
         jobStoreString = 'file:' + jobStoreString

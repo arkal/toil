@@ -17,6 +17,7 @@ import re
 from abc import ABCMeta, abstractmethod
 from contextlib import contextmanager
 from datetime import timedelta
+from uuid import uuid4
 
 try:
     import cPickle
@@ -61,17 +62,21 @@ class AbstractJobStore(object):
 
     def __init__(self, config=None):
         """
-        :param config: If config is not None then the
-        given configuration object will be written to the shared file "config.pickle" which can
-        later be retrieved using the readSharedFileStream. See writeConfigToStore. 
-        If this file already exists it will be overwritten. If config is None, 
-        the shared file "config.pickle" is assumed to exist and is retrieved. See loadConfigFromStore.
+        :param config: If config is not None then the given configuration object will be written
+               to the shared file "config.pickle" which can later be retrieved using the
+               readSharedFileStream. See writeConfigToStore. If this file already exists it will be
+               overwritten. If config is None, the shared file "config.pickle" is assumed to exist
+               and is retrieved. See loadConfigFromStore.
         """
         # Now get on with reading or writing the config
         if config is None:
             with self.readSharedFileStream("config.pickle") as fileHandle:
-                self.__config = cPickle.load(fileHandle)
+                config = cPickle.load(fileHandle)
+                assert config.workflowID is not None
+                self.__config = config
         else:
+            assert config.workflowID is None
+            config.workflowID = str(uuid4())
             self.__config = config
             self.writeConfigToStore()
 
@@ -91,14 +96,14 @@ class AbstractJobStore(object):
     def _checkJobStoreCreation(create, exists, jobStoreString):
         """
         Consistency checks which will result in exceptions if we attempt to overwrite an existing
-        jobStore.
+        jobStore. This method must be called by the constructor of a subclass before any
+        modification are made.
 
-        :type create: boolean
+        :type create: bool
 
-        :type exists: boolean
+        :type exists: bool
 
-        :raise JobStoreCreationException:  Thrown if create=True and exists=True or create=False
-                                           and exists=False
+        :raise JobStoreCreationException:  if create == exists
         """
         if create and exists:
             raise JobStoreCreationException("The job store '%s' already exists. "
@@ -149,13 +154,13 @@ class AbstractJobStore(object):
                 return jobCache[jobId]
             else:
                 return self.load(jobId)
-                
+
         def haveJob(jobId):
             if jobCache is not None:
                 return jobCache.has_key(jobId)
             else:
                 return self.exists(jobId)
-                
+
         def getJobs():
             if jobCache is not None:
                 return jobCache.itervalues()
@@ -230,7 +235,7 @@ class AbstractJobStore(object):
         # Remove any crufty stats/logging files from the previous run
         logger.info("Discarding old statistics and logs...")
         self.readStatsAndLogging(lambda x: None)
-        
+
         logger.info("Job store is clean")
 
     ##########################################
@@ -312,7 +317,9 @@ class AbstractJobStore(object):
 
     def jobs(self):
         """
-        Returns iterator on the jobs in the store.
+        Returns iterator on all jobs in the store. The iterator will contain all jobs, but may also
+        contain orphaned jobs that have already finished succesfully and should not be rerun.
+        To guarantee you only get jobs that can be run, instead construct a ToilState object
         
         :rtype : iterator
         """
@@ -398,7 +405,7 @@ class AbstractJobStore(object):
         Replaces the existing version of a file in the jobStore. Throws an exception if the file
         does not exist.
 
-        :raises ConcurrentFileModificationException: if the file was modified concurrently during
+        :raises ConcurrentFileModificationException: if the file was modified concurrently during \
         an invocation of this method
         """
         raise NotImplementedError()
@@ -410,7 +417,7 @@ class AbstractJobStore(object):
         which can be written to. The yielded file handle does not need to and 
         should not be closed explicitly.
 
-        :raises ConcurrentFileModificationException: if the file was modified concurrently during
+        :raises ConcurrentFileModificationException: if the file was modified concurrently during \
         an invocation of this method
         """
         raise NotImplementedError()
@@ -428,16 +435,16 @@ class AbstractJobStore(object):
     @contextmanager
     def writeSharedFileStream(self, sharedFileName, isProtected=None):
         """
-        Returns a context manager yielding a writable file handle to the global file referenced
+        Returns a context manager yielding a writable file handle to the global file referenced \
         by the given name.
 
-        :param sharedFileName: A file name matching AbstractJobStore.fileNameRegex, unique within
+        :param sharedFileName: A file name matching AbstractJobStore.fileNameRegex, unique within \
         the physical storage represented by this job store
 
-        :param isProtected: True if the file must be encrypted, None if it may be encrypted or
+        :param isProtected: True if the file must be encrypted, None if it may be encrypted or \
         False if it must be stored in the clear.
 
-        :raises ConcurrentFileModificationException: if the file was modified concurrently during
+        :raises ConcurrentFileModificationException: if the file was modified concurrently during \
         an invocation of this method
         """
         raise NotImplementedError()

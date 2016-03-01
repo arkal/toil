@@ -41,6 +41,7 @@ from toil.lib.bioio import (setLoggingFromOptions,
                                getTotalCpuTimeAndMemoryUsage, getTotalCpuTime)
 from toil.common import setupToil, addOptions
 from toil.leader import mainLoop
+from toil.realtimeLogger import RealtimeLogger
 
 class Job(object):
     """
@@ -86,7 +87,7 @@ class Job(object):
         #See Job.rv()
         self._rvs = {}
         self._promiseJobStore = None
-        
+
 
     def run(self, fileStore):
         """
@@ -122,7 +123,7 @@ class Job(object):
         :rtype: Boolean
         """
         return childJob in self._children
-    
+
     def addFollowOn(self, followOnJob):
         """
         Adds a follow-on job, follow-on jobs will be run after the child jobs and \
@@ -163,19 +164,19 @@ class Job(object):
         """
         Adds a function as a child job.
         
-        :param fn: Function to be run as a child job with *args and **kwargs as \
+        :param fn: Function to be run as a child job with ``*args`` and ``**kwargs`` as \
         arguments to this function. See toil.job.FunctionWrappingJob for reserved \
         keyword arguments used to specify resource requirements.
         :return: The new child job that wraps fn.
         :rtype: toil.job.FunctionWrappingJob
         """
         return self.addChild(FunctionWrappingJob(fn, *args, **kwargs))
-    
+
     def addFollowOnFn(self, fn, *args, **kwargs):
         """
         Adds a function as a follow-on job.
         
-        :param fn: Function to be run as a follow-on job with *args and **kwargs as \
+        :param fn: Function to be run as a follow-on job with ``*args`` and ``**kwargs`` as \
         arguments to this function. See toil.job.FunctionWrappingJob for reserved \
         keyword arguments used to specify resource requirements.
         :return: The new follow-on job that wraps fn.
@@ -188,7 +189,7 @@ class Job(object):
         Adds a job function as a child job. See :class:`toil.job.JobFunctionWrappingJob`
         for a definition of a job function.
         
-        :param fn: Job function to be run as a child job with *args and **kwargs as \
+        :param fn: Job function to be run as a child job with ``*args`` and ``**kwargs`` as \
         arguments to this function. See toil.job.JobFunctionWrappingJob for reserved \
         keyword arguments used to specify resource requirements.
         :return: The new child job that wraps fn.
@@ -201,21 +202,21 @@ class Job(object):
         Add a follow-on job function. See :class:`toil.job.JobFunctionWrappingJob`
         for a definition of a job function.
         
-        :param fn: Job function to be run as a follow-on job with *args and **kwargs as \
+        :param fn: Job function to be run as a follow-on job with ``*args`` and ``**kwargs`` as \
         arguments to this function. See toil.job.JobFunctionWrappingJob for reserved \
         keyword arguments used to specify resource requirements.
         :return: The new follow-on job that wraps fn.
         :rtype: toil.job.JobFunctionWrappingJob
         """
         return self.addFollowOn(JobFunctionWrappingJob(fn, *args, **kwargs))
-    
+
     @staticmethod
     def wrapFn(fn, *args, **kwargs):
         """
         Makes a Job out of a function. \
         Convenience function for constructor of :class:`toil.job.FunctionWrappingJob`.
         
-        :param fn: Function to be run with *args and **kwargs as arguments. \
+        :param fn: Function to be run with ``*args`` and ``**kwargs`` as arguments. \
         See toil.job.JobFunctionWrappingJob for reserved keyword arguments used \
         to specify resource requirements.
         :return: The new function that wraps fn.
@@ -229,7 +230,7 @@ class Job(object):
         Makes a Job out of a job function. \
         Convenience function for constructor of :class:`toil.job.JobFunctionWrappingJob`.
         
-        :param fn: Job function to be run with *args and **kwargs as arguments. \
+        :param fn: Job function to be run with ``*args`` and ``**kwargs`` as arguments. \
         See toil.job.JobFunctionWrappingJob for reserved keyword arguments used \
         to specify resource requirements.
         :return: The new job function that wraps fn.
@@ -251,7 +252,7 @@ class Job(object):
     #The following function is used for passing return values between
     #job run functions
     ####################################################
-    
+
     def rv(self, argIndex=None):
         """
         Gets a *promise* (:class:`toil.job.PromisedJobReturnValue`) representing \
@@ -299,6 +300,7 @@ class Job(object):
         """
         :return: The roots of the connected component of jobs that contains this job. \
         A root is a job with no predecessors.
+
         :rtype : set of toil.job.Job instances
         """
         roots = set()
@@ -343,7 +345,7 @@ class Job(object):
         an edge an "implied" edge. The augmented job graph is a job graph including \
         all the implied edges.
 
-        For a job graph G = (V, E) the algorithm is O(|V|^2). It is O(|V| + |E|) for \
+        For a job graph G = (V, E) the algorithm is ``O(|V|^2)``. It is ``O(|V| + |E|)`` for \
         a graph with no follow-ons. The former follow-on case could be improved!
         """
         #Get the root jobs
@@ -381,7 +383,7 @@ class Job(object):
             parser = ArgumentParser()
             Job.Runner.addToilOptions(parser)
             return parser
-        
+
         @staticmethod
         def getDefaultOptions(jobStore):
             """
@@ -394,7 +396,7 @@ class Job(object):
             """
             parser = Job.Runner.getDefaultArgumentParser()
             return parser.parse_args(args=[jobStore])
-        
+
         @staticmethod
         def addToilOptions(parser):
             """
@@ -411,37 +413,40 @@ class Job(object):
             """
             Runs the toil workflow using the given options \
             (see Job.Runner.getDefaultOptions and Job.Runner.addToilOptions) \
-            starting with this job. 
+            starting with this job.
             :param toil.job.Job job: root job of the workflow
             :raises: toil.leader.FailedJobsException if at the end of function \
             their remain failed jobs.
             :returns: return value of job's run function
             """
             setLoggingFromOptions(options)
+
             with setupToil(options, userScript=job.getUserScript()) as (config, batchSystem, jobStore):
-                logger.info("Downloading entire JobStore")
-                jobCache = {jobWrapper.jobStoreID: jobWrapper
-                    for jobWrapper in jobStore.jobs()}
-                logger.info("{} jobs downloaded.".format(len(jobCache)))
-                if options.restart:
-                    #This cleans up any half written jobs after a restart
-                    jobStore.clean(job._loadRootJob(jobStore), jobCache=jobCache) 
-                    rootJob = job._loadRootJob(jobStore)
-                else:
-                    #Make a file to store the root jobs return value in
-                    jobStoreFileID = jobStore.getEmptyFileStoreID()
-                    #Add the root job return value as a promise
-                    if None not in job._rvs:
-                        job._rvs[None] = [] 
-                    job._rvs[None].append(jobStoreFileID)
-                    #Write the name of the promise file in a shared file
-                    with jobStore.writeSharedFileStream("rootJobReturnValue") as fH:
-                        fH.write(jobStoreFileID)
-                    #Setup the first wrapper.
-                    rootJob = job._serialiseFirstJob(jobStore)
-                    #Make sure it's cached
-                    jobCache[rootJob.jobStoreID] = rootJob
-                return mainLoop(config, batchSystem, jobStore, rootJob, jobCache=jobCache)
+                with RealtimeLogger(batchSystem,
+                                    level=options.logLevel if options.realTimeLogging else None):
+                    logger.info("Downloading entire JobStore")
+                    jobCache = {jobWrapper.jobStoreID: jobWrapper
+                        for jobWrapper in jobStore.jobs()}
+                    logger.info("{} jobs downloaded.".format(len(jobCache)))
+                    if options.restart:
+                        #This cleans up any half written jobs after a restart
+                        jobStore.clean(job._loadRootJob(jobStore), jobCache=jobCache)
+                        rootJob = job._loadRootJob(jobStore)
+                    else:
+                        #Make a file to store the root jobs return value in
+                        jobStoreFileID = jobStore.getEmptyFileStoreID()
+                        #Add the root job return value as a promise
+                        if None not in job._rvs:
+                            job._rvs[None] = []
+                        job._rvs[None].append(jobStoreFileID)
+                        #Write the name of the promise file in a shared file
+                        with jobStore.writeSharedFileStream("rootJobReturnValue") as fH:
+                            fH.write(jobStoreFileID)
+                        #Setup the first wrapper.
+                        rootJob = job._serialiseFirstJob(jobStore)
+                        #Make sure it's cached
+                        jobCache[rootJob.jobStoreID] = rootJob
+                    return mainLoop(config, batchSystem, jobStore, rootJob, jobCache=jobCache)
 
     class FileStore( object ):
         """
@@ -451,11 +456,11 @@ class Job(object):
         #Variables used for synching reads/writes
         _lockFilesLock = Semaphore()
         _lockFiles = set()
-        #For files in jobStore that are on the local disk, 
+        #For files in jobStore that are on the local disk,
         #map of jobStoreFileIDs to locations in localTempDir.
         _jobStoreFileIDToCacheLocation = {}
         _terminateEvent = Event() #Used to signify crashes in threads
-        
+
         def __init__(self, jobStore, jobWrapper, localTempDir, inputBlockFn):
             """
             This constructor should not be called by the user, \
@@ -478,7 +483,7 @@ class Job(object):
             #Asynchronous writes stuff
             self.workerNumber = 2
             self.queue = Queue()
-            self.updateSemaphore = Semaphore() 
+            self.updateSemaphore = Semaphore()
             #Function to write files asynchronously to job store
             def asyncWrite():
                 try:
@@ -487,7 +492,7 @@ class Job(object):
                             #Block for up to two seconds waiting for a file
                             args = self.queue.get(timeout=2)
                         except Empty:
-                            #Check if termination event is signaled 
+                            #Check if termination event is signaled
                             #(set in the event of an exception in the worker)
                             if self._terminateEvent.isSet():
                                 raise RuntimeError("The termination flag is set, exiting")
@@ -496,8 +501,8 @@ class Job(object):
                         if args == None:
                             break
                         inputFileHandle, jobStoreFileID = args
-                        #We pass in a fileHandle, rather than the file-name, in case 
-                        #the file itself is deleted. The fileHandle itself should persist 
+                        #We pass in a fileHandle, rather than the file-name, in case
+                        #the file itself is deleted. The fileHandle itself should persist
                         #while we maintain the open file handle
                         with jobStore.updateFileStream(jobStoreFileID) as outputFileHandle:
                             bufferSize=1000000 #TODO: This buffer number probably needs to be modified/tuned
@@ -513,8 +518,8 @@ class Job(object):
                 except:
                     self._terminateEvent.set()
                     raise
-                    
-            self.workers = map(lambda i : Thread(target=asyncWrite), 
+
+            self.workers = map(lambda i : Thread(target=asyncWrite),
                                range(self.workerNumber))
             for worker in self.workers:
                 worker.start()
@@ -532,7 +537,7 @@ class Job(object):
             :rtype: string
             """
             return os.path.abspath(tempfile.mkdtemp(prefix="t", dir=self.localTempDir))
-        
+
         def getLocalTempFile(self):
             """
             Get a new local temporary file that will persist for the duration of the job.
@@ -571,18 +576,21 @@ class Job(object):
             cleanupID = None if not cleanup else self.jobWrapper.jobStoreID
             if absLocalFileName.startswith(self.localTempDir):
                 jobStoreFileID = self.jobStore.getEmptyFileStoreID(cleanupID)
-                self.queue.put((open(absLocalFileName, 'r'), jobStoreFileID))
+                fileHandle = open(absLocalFileName, 'r')
                 if os.stat(absLocalFileName).st_uid == os.getuid():
                     #Chmod if permitted to make file read only to try to prevent accidental user modification
                     os.chmod(absLocalFileName, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
                 with self._lockFilesLock:
                     self._lockFiles.add(jobStoreFileID)
+                # A file handle added to the queue allows the asyncWrite threads to remove their jobID from _lockFiles.
+                # Therefore, a file should only be added after its fileID is added to _lockFiles
+                self.queue.put((fileHandle, jobStoreFileID))
                 self._jobStoreFileIDToCacheLocation[jobStoreFileID] = absLocalFileName
             else:
                 #Write the file directly to the file store
                 jobStoreFileID = self.jobStore.writeFile(localFileName, cleanupID)
             return jobStoreFileID
-        
+
         def writeGlobalFileStream(self, cleanup=False):
             """
             Similar to writeGlobalFile, but allows the writing of a stream to the job store.
@@ -595,13 +603,13 @@ class Job(object):
             """
             #TODO: Make this work with the caching??
             return self.jobStore.writeFileStream(None if not cleanup else self.jobWrapper.jobStoreID)
-        
+
         def readGlobalFile(self, fileStoreID, userPath=None, cache=True):
             """
             Get a copy of a file in the job store. 
             
-            :param string userPath: a path to the name of file to which the global \ 
-            file will be copied or hard-linked (see below). 
+            :param string userPath: a path to the name of file to which the global \
+            file will be copied or hard-linked (see below).
             
             :param boolean cache: If True will use caching (see below). Caching will \
             attempt to keep copies of files between sequences of jobs run on the same \
@@ -622,7 +630,8 @@ class Job(object):
             this will result in two copies of the file on the system.
             
             :return: an absolute path to a local, temporary copy of the file keyed \
-            by fileStoreID. 
+            by fileStoreID.
+
             :rtype : string
             """
             if fileStoreID in self.filesToDelete:
@@ -635,7 +644,7 @@ class Job(object):
             #When requesting a new file from the jobStore first check if fileStoreID
             #is a key in _jobStoreFileIDToCacheLocation.
             if fileStoreID in self._jobStoreFileIDToCacheLocation:
-                cachedAbsFilePath = self._jobStoreFileIDToCacheLocation[fileStoreID]   
+                cachedAbsFilePath = self._jobStoreFileIDToCacheLocation[fileStoreID]
                 if cache:
                     #If the user specifies a location and it is not the current location
                     #return a hardlink to the location, else return the original location
@@ -652,7 +661,7 @@ class Job(object):
                     shutil.copyfile(cachedAbsFilePath, localFilePath)
                     return localFilePath
             else:
-                #If it is not in the cache read it from the jobStore to the 
+                #If it is not in the cache read it from the jobStore to the
                 #desired location
                 localFilePath = userPath if userPath != None else self.getLocalTempFile()
                 self.jobStore.readFile(fileStoreID, localFilePath)
@@ -674,11 +683,11 @@ class Job(object):
             """
             if fileStoreID in self.filesToDelete:
                 raise RuntimeError("Trying to access a file in the jobStore you've deleted: %s" % fileStoreID)
-            
+
             #If fileStoreID is in the cache provide a handle from the local cache
             if fileStoreID in self._jobStoreFileIDToCacheLocation:
                 #This leaks file handles (but the commented out code does not work properly)
-                return open(self._jobStoreFileIDToCacheLocation[fileStoreID], 'r') 
+                return open(self._jobStoreFileIDToCacheLocation[fileStoreID], 'r')
                 #with open(self._jobStoreFileIDToCacheLocation[fileStoreID], 'r') as fH:
                 #        yield fH
             else:
@@ -724,33 +733,33 @@ class Job(object):
                     #Wait till all file writes have completed
                     for i in xrange(len(self.workers)):
                         self.queue.put(None)
-            
+
                     for thread in self.workers:
                         thread.join()
-                    
+
                     #Wait till input block-fn returns - in the event of an exception
-                    #this will eventually terminate 
+                    #this will eventually terminate
                     self.inputBlockFn()
-                    
+
                     #Check the terminate event, if set we can not guarantee
                     #that the workers ended correctly, therefore we exit without
                     #completing the update
                     if self._terminateEvent.isSet():
                         raise RuntimeError("The termination flag is set, exiting before update")
-                    
-                    #Indicate any files that should be deleted once the update of 
+
+                    #Indicate any files that should be deleted once the update of
                     #the job wrapper is completed.
                     self.jobWrapper.filesToDelete = list(self.filesToDelete)
-                    
+
                     #Complete the job
                     self.jobStore.update(self.jobWrapper)
-                    
+
                     #Delete any remnant jobs
                     map(self.jobStore.delete, self.jobsToDelete)
-                    
+
                     #Delete any remnant files
                     map(self.jobStore.deleteFile, self.filesToDelete)
-                    
+
                     #Remove the files to delete list, having successfully removed the files
                     if len(self.filesToDelete) > 0:
                         self.jobWrapper.filesToDelete = []
@@ -771,7 +780,7 @@ class Job(object):
             except: #This is to ensure that the semaphore is released in a crash to stop a deadlock scenario
                 self.updateSemaphore.release()
                 raise
-            
+
         def _cleanLocalTempDir(self, cacheSize):
             """
             At the end of the job, remove all localTempDir files except those whose \
@@ -780,7 +789,7 @@ class Job(object):
             :param int cacheSize: the total number of bytes of files allowed in the cache.
             """
             #Remove files so that the total cached files are smaller than a cacheSize
-            
+
             #List of pairs of (fileCreateTime, fileStoreID) for cached files
             with self._lockFilesLock:
                 deletableCacheFiles = set(self._jobStoreFileIDToCacheLocation.keys()) - self._lockFiles
@@ -802,13 +811,13 @@ class Job(object):
                 os.remove(filePath)
                 totalCachedFileSizes -= fileSize
                 assert totalCachedFileSizes >= 0
-            
-            #Iterate from the base of localTempDir and remove all 
+
+            #Iterate from the base of localTempDir and remove all
             #files/empty directories, recursively
             cachedFiles = set(self._jobStoreFileIDToCacheLocation.values())
-            
+
             def clean(dirOrFile, remove=True):
-                canRemove = True 
+                canRemove = True
                 if os.path.isdir(dirOrFile):
                     for f in os.listdir(dirOrFile):
                         canRemove = canRemove and clean(os.path.join(dirOrFile, f))
@@ -818,20 +827,20 @@ class Job(object):
                 if dirOrFile in cachedFiles:
                     return False
                 os.remove(dirOrFile)
-                return True    
+                return True
             clean(self.localTempDir, False)
-        
+
         def _blockFn(self):
             """
             Blocks while _updateJobWhenDone is running.
-            """ 
+            """
             self.updateSemaphore.acquire()
             self.updateSemaphore.release() #Release so that the block function can be recalled
             #This works, because once acquired the semaphore will not be acquired
             #by _updateJobWhenDone again.
             return
-        
-        def __del__(self): 
+
+        def __del__(self):
             """Cleanup function that is run when destroying the class instance \
             that ensures that all the file writing threads exit.
             """
@@ -971,7 +980,7 @@ class Job(object):
 
         unpickler.find_global = filter_main
         return unpickler.load()
-    
+
     def getUserScript(self):
         return self.userModule
 
@@ -1046,7 +1055,7 @@ class Job(object):
                 for descendant in reacheable:
                     extraEdges[descendant] += job._followOns[:]
         return extraEdges
-    
+
     ####################################################
     #The following functions are used to serialise
     #a job graph to the jobStore
@@ -1147,14 +1156,14 @@ class Job(object):
                 jobWrapper.stack.append(jobs)
         else:
             jobWrapper = jobsToJobWrappers[self]
-        #The return is a tuple stored within a job.stack 
+        #The return is a tuple stored within a job.stack
         #The tuple is jobStoreID, memory, cores, disk, predecessorID
         #The predecessorID is used to establish which predecessors have been
         #completed before running the given Job - it is just a unique ID
         #per predecessor
         return (jobWrapper.jobStoreID, jobWrapper.memory, jobWrapper.cores, jobWrapper.disk,
                 None if jobWrapper.predecessorNumber <= 1 else str(uuid.uuid4()))
-        
+
     def getTopologicalOrderingOfJobs(self):
         """
         :returns: a list of jobs such that for all pairs of indices i, j for which i < j, \
@@ -1175,7 +1184,7 @@ class Job(object):
                 map(getRunOrder, job._children + job._followOns)
         getRunOrder(self)
         return ordering
-    
+
     def _serialiseJob(self, jobStore, jobsToJobWrappers, rootJobWrapper):
         """
         Pickle a job and its jobWrapper to disk.
@@ -1203,8 +1212,8 @@ class Job(object):
         jobsToJobWrappers[self].command = ' '.join( ('_toil', fileStoreID) + userScript)
         #Update the status of the jobWrapper on disk
         jobStore.update(jobsToJobWrappers[self])
-    
-    def _serialiseJobGraph(self, jobWrapper, jobStore, returnValues, firstJob):  
+
+    def _serialiseJobGraph(self, jobWrapper, jobStore, returnValues, firstJob):
         """
         Pickle the graph of jobs in the jobStore. The graph is not fully serialised \
         until the jobWrapper itself is written to disk, this is not performed by this \
@@ -1217,13 +1226,13 @@ class Job(object):
         self.checkJobGraphForDeadlocks()
         #Create the jobWrappers for followOns/children
         jobsToJobWrappers = self._makeJobWrappers(jobWrapper, jobStore)
-        #Get an ordering on the jobs which we use for pickling the jobs in the 
+        #Get an ordering on the jobs which we use for pickling the jobs in the
         #correct order to ensure the promises are properly established
         ordering = self.getTopologicalOrderingOfJobs()
         assert len(ordering) == len(jobsToJobWrappers)
         #Temporarily set the jobStore strings for the promise call back functions
         for job in ordering:
-            job._promiseJobStore = jobStore 
+            job._promiseJobStore = jobStore
         ordering.reverse()
         assert self == ordering[-1]
         if firstJob:
@@ -1253,7 +1262,7 @@ class Job(object):
                 jobWrapper.stack.append(combinedFollowOns)
             if len(combinedChildren) > 0:
                 jobWrapper.stack.append(combinedChildren)
-            
+
     def _serialiseFirstJob(self, jobStore):
         """
         Serialises the root job. Returns the wrapping job.
@@ -1263,7 +1272,7 @@ class Job(object):
                                                 predecessorNumber=0)
         #Write the graph of jobs to disk
         self._serialiseJobGraph(jobWrapper, jobStore, None, True)
-        jobStore.update(jobWrapper) 
+        jobStore.update(jobWrapper)
         #Store the name of the first job in a file in case of restart
         #Up to this point the root-job is not recoverable
         with jobStore.writeSharedFileStream("rootJobStoreID") as f:
@@ -1292,9 +1301,9 @@ class Job(object):
         #Add the promise files to delete to the list of jobStoreFileIDs to delete
         for jobStoreFileID in promiseFilesToDelete:
             fileStore.deleteGlobalFile(jobStoreFileID)
-        promiseFilesToDelete.clear() 
+        promiseFilesToDelete.clear()
         #Now indicate the asynchronous update of the job can happen
-            
+
         fileStore._updateJobWhenDone()
         #Change dir back to cwd dir, if changed by job (this is a safety issue)
         if os.getcwd() != baseDir:
@@ -1339,7 +1348,7 @@ class FunctionWrappingJob(Job):
     def __init__(self, userFunction, *args, **kwargs):
         """
         :param userFunction: The function to wrap. The userFunction will be called \
-        with the *args and **kwargs as arguments. 
+        with the ``*args`` and ``**kwargs`` as arguments.
         
         The keywords "memory", "cores", "disk", "cache" are reserved keyword arguments \
         that if specified will be used to determine the resources for the job, \
@@ -1354,7 +1363,7 @@ class FunctionWrappingJob(Job):
                         if argSpec.defaults != None else {}
         argFn = lambda x : kwargs.pop(x) if x in kwargs else \
                             (human2bytes(str(argDict[x])) if x in argDict.keys() else None)
-        Job.__init__(self, memory=argFn("memory"), cores=argFn("cores"), 
+        Job.__init__(self, memory=argFn("memory"), cores=argFn("cores"),
                      disk=argFn("disk"), cache=argFn("cache"))
         #If dill is installed pickle the user function directly
         #TODO: Add dill support
@@ -1401,6 +1410,7 @@ class EncapsulatedJob(Job):
     
     Let A be the root job of a job subgraph and B be another job we'd like to run after A
     and all its successors have completed, for this use encapsulate::
+
         A, B = A(), B() #Job A and subgraph, Job B
         A' = A.encapsulate()
         A'.addChild(B) #B will run after A and all its successors have 
@@ -1500,8 +1510,8 @@ class PromisedJobReturnValue(object):
     argument to job before the former job's run function has been executed.
     """
     def __init__(self, promiseCallBackFunction):
-        self.promiseCallBackFunction = promiseCallBackFunction 
-        
+        self.promiseCallBackFunction = promiseCallBackFunction
+
 def promisedJobReturnValuePickleFunction(promise):
     """
     This function and promisedJobReturnValueUnpickleFunction are used as custom \
